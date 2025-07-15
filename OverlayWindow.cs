@@ -129,15 +129,11 @@ namespace IcarusAchievements
             _achievementDescription = description;
             _isVisible = true;
 
-            // Auto-hide after 5 seconds - play around with timer
-            var timer = new System.Windows.Threading.DispatcherTimer();
-            timer.Interval = TimeSpan.FromSeconds(5);
-            timer.Tick += (s, e) =>
+            // Auto-hide after 4 seconds - play around with timer. Task.Delay not DispatcherTimer since diff thread
+            Task.Delay(4000).ContinueWith(_ =>
             {
                 _isVisible = false;
-                timer.Stop();
-            };
-            timer.Start();
+            });
         }
 
         /// <summary>
