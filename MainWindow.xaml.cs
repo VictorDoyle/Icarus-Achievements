@@ -11,6 +11,7 @@ namespace IcarusAchievements
         private LogoOverlay _logoOverlay;
         private HotkeyManager _hotkeyManager;
         private SteamService _steamService;
+        private NotificationService _notificationService;
         private DispatcherTimer _steamUpdateTimer;
 
         public MainWindow()
@@ -21,7 +22,10 @@ namespace IcarusAchievements
             this.Width = 400;
             this.Height = 300;
 
+            // Initialize Steam first
             InitializeSteam();
+
+            // Initialize hotkey system
             InitializeHotkeys();
 
             // init overlay in a background thread -> allows the main window to load without blocking
@@ -30,27 +34,54 @@ namespace IcarusAchievements
         }
 
         /// <summary>
-        /// init Steam API 
+        /// Initialize Steam API connection
         /// </summary>
         private void InitializeSteam()
         {
+            // Initialize notification service
+            _notificationService = new NotificationService();
+
             _steamService = new SteamService();
 
+            // Set up status updates to show as Windows notifications
+            _steamService.StatusUpdate += (message) =>
+            {
+                // Determine if it's an error based on the message content
+                bool isError = message.Contains("Failed") || message.Contains("Error") || message.Contains("not running");
+                bool isSuccess = message.Contains("successfully") || message.Contains("initialized");
+
+                if (isError)
+                {
+                    _notificationService.ShowSteamStatus(message, true);
+                }
+                else if (isSuccess)
+                {
+                    _notificationService.ShowSteamStatus(message, false);
+                }
+                else
+                {
+                    _notificationService.ShowSteamStatus(message, false);
+                }
+            };
+
+            // Try to connect to Steam
             bool steamConnected = _steamService.Initialize();
 
             if (steamConnected)
             {
                 this.Title = "Icarus Achievements - Connected to Steam";
 
+                // Set up achievement unlock detection
                 _steamService.AchievementUnlocked += OnSteamAchievementUnlocked;
                 _steamService.GameChanged += OnGameChanged;
 
+                // Set up timer to regularly check Steam API
                 _steamUpdateTimer = new DispatcherTimer();
-                _steamUpdateTimer.Interval = TimeSpan.FromSeconds(1); // TODO: start with 1s but change later for imapct
+                _steamUpdateTimer.Interval = TimeSpan.FromSeconds(1); // Check every second
                 _steamUpdateTimer.Tick += (s, e) => _steamService.Update();
                 _steamUpdateTimer.Start();
 
-                // quick test Steam integration after 5 seconds
+                // Test Steam integration after 5 seconds
                 Task.Delay(5000).ContinueWith(_ =>
                 {
                     _steamService.SimulateAchievementUnlock();
@@ -59,7 +90,7 @@ namespace IcarusAchievements
             else
             {
                 this.Title = "Icarus Achievements - Steam Not Connected";
-                // continue without Steam (fallback mode). This will use the desktop app with cached info etc. access to guides etc
+                // Continue without Steam (fallback mode)
             }
         }
 
@@ -68,6 +99,7 @@ namespace IcarusAchievements
         /// </summary>
         private void OnSteamAchievementUnlocked(SteamAchievement achievement)
         {
+            // Show the achievement in our overlay
             _overlayWindow?.ShowAchievement(
                 achievement.Name,
                 achievement.Description
@@ -92,7 +124,7 @@ namespace IcarusAchievements
         {
             _hotkeyManager = new HotkeyManager();
 
-            // Shift+Tab  presse show the logo overlay
+            // When Shift+Tab is pressed, show the logo overlay
             _hotkeyManager.ShiftTabPressed += () =>
             {
                 _logoOverlay?.Show();
@@ -112,8 +144,8 @@ namespace IcarusAchievements
                 Task.Delay(3000).ContinueWith(_ =>
                 {
                     string message = _steamService?.IsConnected() == true
-                        ? "Steam connected. Real achievements incoming..."
-                        : "Steam not connected - using debug/dev mode";
+                        ? "Steam connected - Real achievements incoming"
+                        : "Steam not connected - Using test mode";
 
                     _overlayWindow.ShowAchievement(
                         "Icarus Achievements Ready",
@@ -174,6 +206,7 @@ namespace IcarusAchievements
             _overlayWindow?.Stop();
             _logoOverlay?.Stop();
             _hotkeyManager?.Dispose();
+            _notificationService?.Dispose();
             base.OnClosed(e);
         }
     }

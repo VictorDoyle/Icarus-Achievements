@@ -13,10 +13,9 @@ namespace IcarusAchievements
         private bool _steamInitialized = false;
         private AppId_t _currentGameId;
         private string _currentGameName = "";
-
-        // Events for achievement unlocks
         public event Action<SteamAchievement> AchievementUnlocked;
         public event Action<string> GameChanged;
+        public event Action<string> StatusUpdate; // TODO: update, rn its visible logging instead of Console.WriteLine
 
         /// <summary>
         /// init connection to Steam
@@ -25,18 +24,20 @@ namespace IcarusAchievements
         {
             try
             {
-                // Check if Steam is running
+                StatusUpdate?.Invoke("Checking if Steam is running...");
                 if (!SteamAPI.IsSteamRunning())
                 {
-                    Console.WriteLine("Steam is not running");
+                    StatusUpdate?.Invoke("Steam is not running - Start Steam first");
                     return false;
                 }
+
+                StatusUpdate?.Invoke("Steam detected! Initializing API...");
 
                 _steamInitialized = SteamAPI.Init();
 
                 if (_steamInitialized)
                 {
-                    Console.WriteLine("Steam API initialized successfully");
+                    StatusUpdate?.Invoke("Steam API initialized successfully");
 
                     SetupCallbacks();
 
@@ -47,13 +48,14 @@ namespace IcarusAchievements
                 }
                 else
                 {
-                    Console.WriteLine("Failed to initialize Steam API");
+                    //TODO: check if steam_api64.dll is missing, find way to auto fix this
+                    StatusUpdate?.Invoke("Failed to initialize Steam API - Need steam_api64.dll file");
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Steam initialization error: {ex.Message}");
+                StatusUpdate?.Invoke($"Steam initialization error: {ex.Message}");
                 return false;
             }
         }
@@ -82,12 +84,12 @@ namespace IcarusAchievements
                 _currentGameName = $"Steam App {_currentGameId}";
 
                 GameChanged?.Invoke(_currentGameName);
-                Console.WriteLine($"Detected app: {_currentGameName} (ID: {_currentGameId})");
+                StatusUpdate?.Invoke($"Detected app: {_currentGameName} (ID: {_currentGameId})");
             }
 
             catch (Exception ex)
             {
-                Console.WriteLine($"Error getting current game: {ex.Message}");
+                StatusUpdate?.Invoke($"Error getting current game: {ex.Message}");
             }
         }
 
@@ -102,6 +104,13 @@ namespace IcarusAchievements
 
             try
             {
+                // req fresh achievement data from Steam first
+                if (!SteamUserStats.RequestCurrentStats())
+                {
+                    StatusUpdate?.Invoke("Failed to request stats from Steam");
+                    return achievements;
+                }
+
                 // get number of achievements for current game
                 uint numAchievements = SteamUserStats.GetNumAchievements();
 
@@ -137,11 +146,11 @@ namespace IcarusAchievements
                     }
                 }
 
-                Console.WriteLine($"Found {achievements.Count} achievements for current game");
+                StatusUpdate?.Invoke($"Found {achievements.Count} achievements for current game");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error getting achievements: {ex.Message}");
+                StatusUpdate?.Invoke($"Error getting achievements: {ex.Message}");
             }
 
             return achievements;
@@ -166,7 +175,7 @@ namespace IcarusAchievements
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error checking achievements: {ex.Message}");
+                StatusUpdate?.Invoke($"Error checking achievements: {ex.Message}");
             }
         }
 
