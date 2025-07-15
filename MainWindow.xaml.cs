@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Threading;
 
 namespace IcarusAchievements
 {
@@ -9,6 +10,8 @@ namespace IcarusAchievements
         private OverlayWindow _overlayWindow;
         private LogoOverlay _logoOverlay;
         private HotkeyManager _hotkeyManager;
+        private SteamService _steamService;
+        private DispatcherTimer _steamUpdateTimer;
 
         public MainWindow()
         {
@@ -18,11 +21,68 @@ namespace IcarusAchievements
             this.Width = 400;
             this.Height = 300;
 
+            InitializeSteam();
             InitializeHotkeys();
 
             // init overlay in a background thread -> allows the main window to load without blocking
             Task.Run(() => StartOverlay());
             Task.Run(() => StartLogoOverlay());
+        }
+
+        /// <summary>
+        /// init Steam API 
+        /// </summary>
+        private void InitializeSteam()
+        {
+            _steamService = new SteamService();
+
+            bool steamConnected = _steamService.Initialize();
+
+            if (steamConnected)
+            {
+                this.Title = "Icarus Achievements - Connected to Steam";
+
+                _steamService.AchievementUnlocked += OnSteamAchievementUnlocked;
+                _steamService.GameChanged += OnGameChanged;
+
+                _steamUpdateTimer = new DispatcherTimer();
+                _steamUpdateTimer.Interval = TimeSpan.FromSeconds(1); // TODO: start with 1s but change later for imapct
+                _steamUpdateTimer.Tick += (s, e) => _steamService.Update();
+                _steamUpdateTimer.Start();
+
+                // quick test Steam integration after 5 seconds
+                Task.Delay(5000).ContinueWith(_ =>
+                {
+                    _steamService.SimulateAchievementUnlock();
+                });
+            }
+            else
+            {
+                this.Title = "Icarus Achievements - Steam Not Connected";
+                // continue without Steam (fallback mode). This will use the desktop app with cached info etc. access to guides etc
+            }
+        }
+
+        /// <summary>
+        /// Handle Steam achievement unlocks
+        /// </summary>
+        private void OnSteamAchievementUnlocked(SteamAchievement achievement)
+        {
+            _overlayWindow?.ShowAchievement(
+                achievement.Name,
+                achievement.Description
+            );
+        }
+
+        /// <summary>
+        /// Handle game changes
+        /// </summary>
+        private void OnGameChanged(string gameName)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                this.Title = $"Icarus Achievements - {gameName}";
+            });
         }
 
         /// <summary>
@@ -51,9 +111,13 @@ namespace IcarusAchievements
                 // show a test achievement after 3 seconds
                 Task.Delay(3000).ContinueWith(_ =>
                 {
+                    string message = _steamService?.IsConnected() == true
+                        ? "Steam connected. Real achievements incoming..."
+                        : "Steam not connected - using debug/dev mode";
+
                     _overlayWindow.ShowAchievement(
-                        "Overlay Working",
-                        "Press Shift+Tab to open Icarus Achievements"
+                        "Icarus Achievements Ready",
+                        message
                     );
                 });
 
@@ -87,7 +151,7 @@ namespace IcarusAchievements
                         this.WindowState = WindowState.Normal;
                         this.Activate();
                         this.Topmost = true;
-                        this.Topmost = false;
+                        this.Topmost = false; // Flash to get attention
                     });
                 };
 
@@ -105,6 +169,8 @@ namespace IcarusAchievements
 
         protected override void OnClosed(EventArgs e)
         {
+            _steamUpdateTimer?.Stop();
+            _steamService?.Shutdown();
             _overlayWindow?.Stop();
             _logoOverlay?.Stop();
             _hotkeyManager?.Dispose();
