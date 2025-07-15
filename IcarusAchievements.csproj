@@ -13,6 +13,7 @@
     <PackageReference Include="GameOverlay.Net" Version="4.3.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.7" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.7" />
+    <PackageReference Include="MouseKeyHook" Version="5.7.1" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
     <PackageReference Include="Steamworks.NET" Version="2024.8.0" />
