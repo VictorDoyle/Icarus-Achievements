@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.ObjectModel;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
@@ -14,13 +16,19 @@ namespace IcarusAchievements
         private NotificationService _notificationService;
         private DispatcherTimer _steamUpdateTimer;
 
+        // Achievement tracking
+        private ObservableCollection<SteamAchievement> _achievements = new ObservableCollection<SteamAchievement>();
+
         public MainWindow()
         {
             InitializeComponent();
 
             this.Title = "Icarus Achievements";
-            this.Width = 400;
-            this.Height = 300;
+            this.Width = 600;
+            this.Height = 500;
+
+            // Initialize UI
+            InitializeUI();
 
             // Initialize Steam first
             InitializeSteam();
@@ -34,6 +42,18 @@ namespace IcarusAchievements
         }
 
         /// <summary>
+        /// Initialize UI components
+        /// </summary>
+        private void InitializeUI()
+        {
+            // Set up achievement list
+            AchievementListBox.ItemsSource = _achievements;
+
+            // Update initial UI state
+            UpdateUI(new UserProfileData { PlayerName = "Loading..." });
+        }
+
+        /// <summary>
         /// Initialize Steam API connection
         /// </summary>
         private void InitializeSteam()
@@ -43,26 +63,19 @@ namespace IcarusAchievements
 
             _steamService = new SteamService();
 
-            // Set up status updates to show as Windows notifications
+            // Set up status updates to show as notifications
             _steamService.StatusUpdate += (message) =>
             {
-                // Determine if it's an error based on the message content
                 bool isError = message.Contains("Failed") || message.Contains("Error") || message.Contains("not running");
-                bool isSuccess = message.Contains("successfully") || message.Contains("initialized");
-
-                if (isError)
-                {
-                    _notificationService.ShowSteamStatus(message, true);
-                }
-                else if (isSuccess)
-                {
-                    _notificationService.ShowSteamStatus(message, false);
-                }
-                else
-                {
-                    _notificationService.ShowSteamStatus(message, false);
-                }
+                _notificationService.ShowSteamStatus(message, isError);
             };
+
+            // Set up profile updates
+            _steamService.ProfileUpdated += OnProfileUpdated;
+
+            // Set up achievement unlock detection
+            _steamService.AchievementUnlocked += OnSteamAchievementUnlocked;
+            _steamService.GameChanged += OnGameChanged;
 
             // Try to connect to Steam
             bool steamConnected = _steamService.Initialize();
@@ -71,15 +84,14 @@ namespace IcarusAchievements
             {
                 this.Title = "Icarus Achievements - Connected to Steam";
 
-                // Set up achievement unlock detection
-                _steamService.AchievementUnlocked += OnSteamAchievementUnlocked;
-                _steamService.GameChanged += OnGameChanged;
-
                 // Set up timer to regularly check Steam API
                 _steamUpdateTimer = new DispatcherTimer();
-                _steamUpdateTimer.Interval = TimeSpan.FromSeconds(1); // Check every second
+                _steamUpdateTimer.Interval = TimeSpan.FromSeconds(2); // Check every 2 seconds
                 _steamUpdateTimer.Tick += (s, e) => _steamService.Update();
                 _steamUpdateTimer.Start();
+
+                // Load initial achievement data
+                LoadAchievementData();
 
                 // Test Steam integration after 5 seconds
                 Task.Delay(5000).ContinueWith(_ =>
@@ -95,6 +107,71 @@ namespace IcarusAchievements
         }
 
         /// <summary>
+        /// Load achievement data from Steam
+        /// </summary>
+        private void LoadAchievementData()
+        {
+            if (_steamService?.IsConnected() != true) return;
+
+            Task.Run(() =>
+            {
+                var achievements = _steamService.GetCurrentGameAchievements();
+
+                Dispatcher.Invoke(() =>
+                {
+                    _achievements.Clear();
+
+                    // Add achievements sorted by unlock status and rarity
+                    var sortedAchievements = achievements
+                        .OrderByDescending(a => a.IsUnlocked)
+                        .ThenByDescending(a => a.Rarity)
+                        .ThenBy(a => a.Name);
+
+                    foreach (var achievement in sortedAchievements)
+                    {
+                        _achievements.Add(achievement);
+                    }
+                });
+            });
+        }
+
+        /// <summary>
+        /// Handle Steam profile updates
+        /// </summary>
+        private void OnProfileUpdated(UserProfileData profileData)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                UpdateUI(profileData);
+            });
+        }
+
+        /// <summary>
+        /// Update UI with profile data
+        /// </summary>
+        private void UpdateUI(UserProfileData profileData)
+        {
+            // Update header
+            PlayerNameText.Text = $"Player: {profileData.PlayerName}";
+            CurrentGameText.Text = $"Game: {profileData.CurrentGameName}";
+
+            // Update stats
+            ProgressText.Text = $"{profileData.UnlockedAchievements}/{profileData.TotalAchievements} ({profileData.CompletionPercentage:F1}%)";
+            UnlockedText.Text = profileData.UnlockedAchievements.ToString();
+            RemainingText.Text = (profileData.TotalAchievements - profileData.UnlockedAchievements).ToString();
+
+            // Update progress bar
+            ProgressBar.Maximum = profileData.TotalAchievements;
+            ProgressBar.Value = profileData.UnlockedAchievements;
+
+            // Update window title with completion
+            if (profileData.TotalAchievements > 0)
+            {
+                this.Title = $"Icarus Achievements - {profileData.CurrentGameName} ({profileData.CompletionPercentage:F1}%)";
+            }
+        }
+
+        /// <summary>
         /// Handle Steam achievement unlocks
         /// </summary>
         private void OnSteamAchievementUnlocked(SteamAchievement achievement)
@@ -104,6 +181,20 @@ namespace IcarusAchievements
                 achievement.Name,
                 achievement.Description
             );
+
+            // Update achievement in list
+            Dispatcher.Invoke(() =>
+            {
+                var existingAchievement = _achievements.FirstOrDefault(a => a.Id == achievement.Id);
+                if (existingAchievement != null)
+                {
+                    existingAchievement.IsUnlocked = true;
+                    existingAchievement.UnlockTime = achievement.UnlockTime;
+                }
+
+                // Refresh the list to show updated status
+                LoadAchievementData();
+            });
         }
 
         /// <summary>
@@ -113,7 +204,8 @@ namespace IcarusAchievements
         {
             Dispatcher.Invoke(() =>
             {
-                this.Title = $"Icarus Achievements - {gameName}";
+                // Reload achievement data for new game
+                LoadAchievementData();
             });
         }
 
@@ -197,6 +289,22 @@ namespace IcarusAchievements
                         MessageBoxButton.OK, MessageBoxImage.Error);
                 });
             }
+        }
+
+        /// <summary>
+        /// Test achievement button click
+        /// </summary>
+        private void TestAchievementButton_Click(object sender, RoutedEventArgs e)
+        {
+            _steamService?.SimulateAchievementUnlock();
+        }
+
+        /// <summary>
+        /// Refresh data button click
+        /// </summary>
+        private void RefreshButton_Click(object sender, RoutedEventArgs e)
+        {
+            LoadAchievementData();
         }
 
         protected override void OnClosed(EventArgs e)
