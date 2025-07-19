@@ -169,6 +169,10 @@ namespace IcarusAchievements
             {
                 this.Title = $"Icarus Achievements - {profileData.CurrentGameName} ({profileData.CompletionPercentage:F1}%)";
             }
+            else
+            {
+                this.Title = $"Icarus Achievements - {profileData.CurrentGameName}";
+            }
         }
 
         /// <summary>
