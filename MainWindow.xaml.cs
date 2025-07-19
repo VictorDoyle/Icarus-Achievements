@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
+using Hardcodet.Wpf.TaskbarNotification;
 
 namespace IcarusAchievements
 {
@@ -15,6 +16,7 @@ namespace IcarusAchievements
         private SteamService _steamService;
         private NotificationService _notificationService;
         private DispatcherTimer _steamUpdateTimer;
+        private TaskbarIcon _taskbarIcon;
 
         // Achievement tracking
         private ObservableCollection<SteamAchievement> _achievements = new ObservableCollection<SteamAchievement>();
@@ -27,18 +29,92 @@ namespace IcarusAchievements
             this.Width = 600;
             this.Height = 500;
 
+            // Start minimized to system tray
+            this.WindowState = WindowState.Minimized;
+            this.ShowInTaskbar = false;
+
+            // Initialize system tray
+            InitializeSystemTray();
+
             // Initialize UI
             InitializeUI();
 
-            // Initialize Steam first
+            // Initialize Steam monitoring
             InitializeSteam();
 
             // Initialize hotkey system
             InitializeHotkeys();
 
-            // init overlay in a background thread -> allows the main window to load without blocking
+            // init overlay in a background thread
             Task.Run(() => StartOverlay());
             Task.Run(() => StartLogoOverlay());
+
+            // Show startup notification
+            ShowStartupNotification();
+        }
+
+        /// <summary>
+        /// Initialize system tray icon and menu
+        /// </summary>
+        private void InitializeSystemTray()
+        {
+            _taskbarIcon = new TaskbarIcon();
+            _taskbarIcon.Icon = System.Drawing.SystemIcons.Application; // You can replace with custom icon
+            _taskbarIcon.ToolTipText = "Icarus Achievements - Monitoring Steam";
+
+            // Create context menu
+            var contextMenu = new System.Windows.Controls.ContextMenu();
+
+            var openItem = new System.Windows.Controls.MenuItem();
+            openItem.Header = "Open Dashboard";
+            openItem.Click += (s, e) => ShowMainWindow();
+
+            var exitItem = new System.Windows.Controls.MenuItem();
+            exitItem.Header = "Exit";
+            exitItem.Click += (s, e) => Application.Current.Shutdown();
+
+            contextMenu.Items.Add(openItem);
+            contextMenu.Items.Add(new System.Windows.Controls.Separator());
+            contextMenu.Items.Add(exitItem);
+
+            _taskbarIcon.ContextMenu = contextMenu;
+
+            // Double-click to open dashboard
+            _taskbarIcon.TrayMouseDoubleClick += (s, e) => ShowMainWindow();
+        }
+
+        /// <summary>
+        /// Show startup notification
+        /// </summary>
+        private void ShowStartupNotification()
+        {
+            _taskbarIcon.ShowBalloonTip("Icarus Achievements",
+                "Now monitoring Steam for achievement activity",
+                BalloonIcon.Info);
+        }
+
+        /// <summary>
+        /// Show main window from system tray
+        /// </summary>
+        private void ShowMainWindow()
+        {
+            this.Show();
+            this.WindowState = WindowState.Normal;
+            this.ShowInTaskbar = true;
+            this.Activate();
+        }
+
+        /// <summary>
+        /// Hide to system tray instead of closing
+        /// </summary>
+        protected override void OnStateChanged(EventArgs e)
+        {
+            if (WindowState == WindowState.Minimized)
+            {
+                this.Hide();
+                this.ShowInTaskbar = false;
+            }
+            base.OnStateChanged(e);
         }
 
         /// <summary>
@@ -49,25 +125,31 @@ namespace IcarusAchievements
             // Set up achievement list
             AchievementListBox.ItemsSource = _achievements;
 
-            // Update initial UI state
-            UpdateUI(new UserProfileData { PlayerName = "Loading..." });
+            // Update initial UI state with placeholder data
+            UpdateUI(new UserProfileData { PlayerName = "Monitoring...", CurrentGameName = "No game detected" });
         }
 
         /// <summary>
-        /// Initialize Steam API connection
+        /// Initialize Steam monitoring - now works as background service
         /// </summary>
         private void InitializeSteam()
         {
-            // Initialize notification service
             _notificationService = new NotificationService();
-
             _steamService = new SteamService();
 
-            // Set up status updates to show as notifications
+            // Set up status updates for system tray notifications
             _steamService.StatusUpdate += (message) =>
             {
                 bool isError = message.Contains("Failed") || message.Contains("Error") || message.Contains("not running");
-                _notificationService.ShowSteamStatus(message, isError);
+
+                if (isError)
+                {
+                    _taskbarIcon.ShowBalloonTip("Steam Error", message, BalloonIcon.Warning);
+                }
+                else if (message.Contains("Detected game") || message.Contains("initialized"))
+                {
+                    _taskbarIcon.ShowBalloonTip("Icarus Achievements", message, BalloonIcon.Info);
+                }
             };
 
             // Set up profile updates
@@ -77,32 +159,49 @@ namespace IcarusAchievements
             _steamService.AchievementUnlocked += OnSteamAchievementUnlocked;
             _steamService.GameChanged += OnGameChanged;
 
-            // Try to connect to Steam
-            bool steamConnected = _steamService.Initialize();
+            // Start monitoring Steam (don't require immediate connection)
+            StartSteamMonitoring();
+        }
 
-            if (steamConnected)
+        /// <summary>
+        /// Start continuous Steam monitoring
+        /// </summary>
+        private void StartSteamMonitoring()
+        {
+            // Set up timer to continuously check for Steam
+            _steamUpdateTimer = new DispatcherTimer();
+            _steamUpdateTimer.Interval = TimeSpan.FromSeconds(5); // Check every 5 seconds
+            _steamUpdateTimer.Tick += CheckSteamStatus;
+            _steamUpdateTimer.Start();
+
+            // Initial check
+            CheckSteamStatus(null, null);
+        }
+
+        /// <summary>
+        /// Continuously monitor Steam status
+        /// </summary>
+        private void CheckSteamStatus(object sender, EventArgs e)
+        {
+            if (!_steamService.IsConnected())
             {
-                this.Title = "Icarus Achievements - Connected to Steam";
+                // Try to connect to Steam
+                bool connected = _steamService.Initialize();
 
-                // Set up timer to regularly check Steam API
-                _steamUpdateTimer = new DispatcherTimer();
-                _steamUpdateTimer.Interval = TimeSpan.FromSeconds(2); // Check every 2 seconds
-                _steamUpdateTimer.Tick += (s, e) => _steamService.Update();
-                _steamUpdateTimer.Start();
-
-                // Load initial achievement data
-                LoadAchievementData();
-
-                // Test Steam integration after 5 seconds
-                Task.Delay(5000).ContinueWith(_ =>
+                if (connected)
                 {
-                    _steamService.SimulateAchievementUnlock();
-                });
+                    // Steam just connected
+                    _taskbarIcon.ShowBalloonTip("Steam Detected",
+                        "Steam connection established. Now monitoring for games.",
+                        BalloonIcon.Info);
+
+                    LoadAchievementData();
+                }
             }
             else
             {
-                this.Title = "Icarus Achievements - Steam Not Connected";
-                // Continue without Steam (fallback mode)
+                // Steam is connected, update normally
+                _steamService.Update();
             }
         }
 
@@ -151,16 +250,16 @@ namespace IcarusAchievements
         /// </summary>
         private void UpdateUI(UserProfileData profileData)
         {
-            // Update header
+            // Update header elements (these exist in XAML)
             PlayerNameText.Text = $"Player: {profileData.PlayerName}";
             CurrentGameText.Text = $"Game: {profileData.CurrentGameName}";
 
-            // Update stats
+            // Update stats elements (these exist in XAML)
             ProgressText.Text = $"{profileData.UnlockedAchievements}/{profileData.TotalAchievements} ({profileData.CompletionPercentage:F1}%)";
             UnlockedText.Text = profileData.UnlockedAchievements.ToString();
             RemainingText.Text = (profileData.TotalAchievements - profileData.UnlockedAchievements).ToString();
 
-            // Update progress bar
+            // Update progress bar (this exists in XAML)
             ProgressBar.Maximum = profileData.TotalAchievements;
             ProgressBar.Value = profileData.UnlockedAchievements;
 
@@ -202,12 +301,20 @@ namespace IcarusAchievements
         }
 
         /// <summary>
-        /// Handle game changes
+        /// Handle game changes with user-friendly notifications
         /// </summary>
         private void OnGameChanged(string gameName)
         {
+            // Show system tray notification for game detection
+            _taskbarIcon.ShowBalloonTip("Steam Game Detected",
+                $"Loading achievements for {gameName}...",
+                BalloonIcon.Info);
+
             Dispatcher.Invoke(() =>
             {
+                // Update UI title
+                this.Title = $"Icarus Achievements - {gameName}";
+
                 // Reload achievement data for new game
                 LoadAchievementData();
             });
@@ -275,11 +382,7 @@ namespace IcarusAchievements
                 {
                     Dispatcher.Invoke(() =>
                     {
-                        this.Show();
-                        this.WindowState = WindowState.Normal;
-                        this.Activate();
-                        this.Topmost = true;
-                        this.Topmost = false; // Flash to get attention
+                        ShowMainWindow();
                     });
                 };
 
@@ -319,6 +422,7 @@ namespace IcarusAchievements
             _logoOverlay?.Stop();
             _hotkeyManager?.Dispose();
             _notificationService?.Dispose();
+            _taskbarIcon?.Dispose();
             base.OnClosed(e);
         }
     }
